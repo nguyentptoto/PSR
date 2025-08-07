@@ -178,160 +178,164 @@ class PdfApprovalController extends Controller
         return back()->with('success', $message);
     }
 
-private function performApprovalLogic(PdfPurchaseRequest $model, $comment = null)
-{
-    $user = Auth::user();
-    $user->load('assignments.group', 'assignments.approvalRank');
-    $currentRankLevel = $model->current_rank_level;
+    private function performApprovalLogic(PdfPurchaseRequest $model, $comment = null)
+    {
+        $user = Auth::user();
+        $user->load('assignments.group', 'assignments.approvalRank');
+        $currentRankLevel = $model->current_rank_level;
 
-    $currentPdfPath = $model->signed_pdf_path
-        ? Storage::disk('public')->path($model->signed_pdf_path)
-        : Storage::disk('public')->path($model->original_pdf_path);
+        $currentPdfPath = $model->signed_pdf_path
+            ? Storage::disk('public')->path($model->signed_pdf_path)
+            : Storage::disk('public')->path($model->original_pdf_path);
 
-    if (!file_exists($currentPdfPath)) {
-        throw new \Exception("Không tìm thấy file PDF hiện tại để thêm chữ ký.");
-    }
-
-    $userSignaturePath = Storage::disk('public')->path($user->signature_image_path);
-    if (!file_exists($userSignaturePath)) {
-        throw new \Exception("Không tìm thấy ảnh chữ ký của người duyệt.");
-    }
-
-    $x = $model->signature_pos_x ?? 85;
-    $y = $model->signature_pos_y ?? 50;
-    $width = $model->signature_width ?? 15;
-    $height = $model->signature_height ?? 12;
-    $page = $model->signature_page ?? 1;
-
-    $lastSignedHistory = ApprovalHistory::where('pdf_purchase_request_id', $model->id)
-        ->whereIn('action', ['signed_and_submitted', 'approved'])
-        ->whereNotNull('signature_position')
-        ->latest('created_at')
-        ->first();
-
-    $lastPosition = null;
-    if ($lastSignedHistory) {
-        // Kiểm tra xem dữ liệu có phải là chuỗi không trước khi giải mã
-        if (is_string($lastSignedHistory->signature_position)) {
-            $lastPosition = json_decode($lastSignedHistory->signature_position, true);
-        } else {
-            // Nếu đã là mảng, gán trực tiếp
-            $lastPosition = $lastSignedHistory->signature_position;
-        }
-    }
-
-    $currentX = $lastPosition ? ($lastPosition['x'] ?? $x) : $x;
-    $offsetX = ($lastPosition['width'] ?? $width) + 12;
-    $nextX = $currentX + $offsetX;
-    $now = now()->format('H:i:s d/m/Y ');
-
-    $tempSignedPdfFileName = 'PR_Signed_Temp_' . $model->pia_code . '_' . time() . '.pdf';
-    $tempSignedPdfPath = 'pr_pdfs/signed/' . $tempSignedPdfFileName;
-    $tempOutputFilePath = Storage::disk('public')->path($tempSignedPdfPath);
-
-    DB::beginTransaction();
-    try {
-        $pdf = new Fpdi();
-        $pdf->setPrintHeader(false);
-        $pdf->setPrintFooter(false);
-        $pdf->SetDrawColor(255, 255, 255);
-        $pdf->SetLineWidth(0);
-        $pdf->SetCellPaddings(0, 0, 0, 0);
-        $pageCount = $pdf->setSourceFile($currentPdfPath);
-
-        if ($page > $pageCount) {
-            throw new \Exception("Trang ký ({$page}) vượt quá số trang của PDF gốc ({$pageCount}).");
+        if (!file_exists($currentPdfPath)) {
+            throw new \Exception("Không tìm thấy file PDF hiện tại để thêm chữ ký.");
         }
 
-        for ($i = 1; $i <= $pageCount; $i++) {
-            $tplId = $pdf->importPage($i);
-            $size = $pdf->getTemplateSize($tplId);
-            $pdf->AddPage($size['orientation'], [$size['width'], $size['height']]);
-            $pdf->useTemplate($tplId);
+        $userSignaturePath = Storage::disk('public')->path($user->signature_image_path);
+        if (!file_exists($userSignaturePath)) {
+            throw new \Exception("Không tìm thấy ảnh chữ ký của người duyệt.");
+        }
 
-            if ($i == $page) {
-                $pdf->Image($userSignaturePath, $nextX, $y, $width, $height, '', '', '', false, 300, '', false, false, false);
-                $pdf->SetFont('helvetica', '', 7);
-                $pdf->SetTextColor(0, 0, 0);
-                $textY_time = $y + $height + 4;
-                $pdf->Text($nextX, $textY_time, $now);
+        $x = $model->signature_pos_x ?? 85;
+        $y = $model->signature_pos_y ?? 50;
+        $width = $model->signature_width ?? 15;
+        $height = $model->signature_height ?? 12;
+        $page = $model->signature_page ?? 1;
 
-                if ($currentRankLevel == 3 && !$model->requires_director_approval) {
-                    $nextX_duplicate = $nextX + $offsetX;
-                    $pdf->Image($userSignaturePath, $nextX_duplicate, $y, $width, $height, '', '', '', false, 300, '', false, false, false);
-                    $pdf->Text($nextX_duplicate, $textY_time, $now);
-                    $nextX = $nextX_duplicate;
+        $lastSignedHistory = ApprovalHistory::where('pdf_purchase_request_id', $model->id)
+            ->whereIn('action', ['signed_and_submitted', 'approved'])
+            ->whereNotNull('signature_position')
+            ->latest('created_at')
+            ->first();
+
+        $lastPosition = null;
+        if ($lastSignedHistory) {
+            // Kiểm tra xem dữ liệu có phải là chuỗi không trước khi giải mã
+            if (is_string($lastSignedHistory->signature_position)) {
+                $lastPosition = json_decode($lastSignedHistory->signature_position, true);
+            } else {
+                // Nếu đã là mảng, gán trực tiếp
+                $lastPosition = $lastSignedHistory->signature_position;
+            }
+        }
+
+        $currentX = $lastPosition ? ($lastPosition['x'] ?? $x) : $x;
+        $offsetX = ($lastPosition['width'] ?? $width) + 12;
+        $nextX = $currentX + $offsetX;
+        $now = now()->format('H:i:s d/m/Y ');
+
+        $tempSignedPdfFileName = 'PR_Signed_Temp_' . $model->pia_code . '_' . time() . '.pdf';
+        $tempSignedPdfPath = 'pr_pdfs/signed/' . $tempSignedPdfFileName;
+        $tempOutputFilePath = Storage::disk('public')->path($tempSignedPdfPath);
+
+        DB::beginTransaction();
+        try {
+            $pdf = new Fpdi();
+            $pdf->setPrintHeader(false);
+            $pdf->setPrintFooter(false);
+            $pdf->SetDrawColor(255, 255, 255);
+            $pdf->SetLineWidth(0);
+            $pdf->SetCellPaddings(0, 0, 0, 0);
+            $pageCount = $pdf->setSourceFile($currentPdfPath);
+
+            if ($page > $pageCount) {
+                throw new \Exception("Trang ký ({$page}) vượt quá số trang của PDF gốc ({$pageCount}).");
+            }
+
+            for ($i = 1; $i <= $pageCount; $i++) {
+                $tplId = $pdf->importPage($i);
+                $size = $pdf->getTemplateSize($tplId);
+                $pdf->AddPage($size['orientation'], [$size['width'], $size['height']]);
+                $pdf->useTemplate($tplId);
+
+                if ($i == $page) {
+                    $pdf->Image($userSignaturePath, $nextX, $y, $width, $height, '', '', '', false, 300, '', false, false, false);
+                    $pdf->SetFont('helvetica', '', 7);
+                    $pdf->SetTextColor(0, 0, 0);
+                    $textY_time = $y + $height + 4;
+                    $pdf->Text($nextX, $textY_time, $now);
+
+                    if ($currentRankLevel == 3 && !$model->requires_director_approval) {
+                        $nextX_duplicate = $nextX + $offsetX;
+                        $pdf->Image($userSignaturePath, $nextX_duplicate, $y, $width, $height, '', '', '', false, 300, '', false, false, false);
+                        $pdf->Text($nextX_duplicate, $textY_time, $now);
+                        $nextX = $nextX_duplicate;
+                    }
                 }
             }
-        }
 
-        Storage::disk('public')->makeDirectory('pr_pdfs/signed');
-        $pdf->Output($tempOutputFilePath, 'F');
+            Storage::disk('public')->makeDirectory('pr_pdfs/signed');
+            $pdf->Output($tempOutputFilePath, 'F');
 
-        if ($model->signed_pdf_path && Storage::disk('public')->exists($model->signed_pdf_path)) {
-            Storage::disk('public')->delete($model->signed_pdf_path);
-        }
-
-        $model->signature_pos_x = $nextX;
-        $model->signature_pos_y = $y;
-        $model->signature_width = $width;
-        $model->signature_height = $height;
-        $model->signature_page = $page;
-        $model->signed_pdf_path = $tempSignedPdfPath;
-
-        $rankAtApproval = 'Unknown';
-        foreach ($user->assignments as $assignment) {
-            if ($assignment->approvalRank->rank_level === $currentRankLevel) {
-                $rankAtApproval = $assignment->group->name . ' Cấp ' . $assignment->approvalRank->rank_level;
-                break;
+            if ($model->signed_pdf_path && Storage::disk('public')->exists($model->signed_pdf_path)) {
+                Storage::disk('public')->delete($model->signed_pdf_path);
             }
-        }
 
-        $signaturePositionData = json_encode([
-            'x' => $nextX, 'y' => $y, 'width' => $width, 'height' => $height, 'page' => $page,
-        ]);
+            $model->signature_pos_x = $nextX;
+            $model->signature_pos_y = $y;
+            $model->signature_width = $width;
+            $model->signature_height = $height;
+            $model->signature_page = $page;
+            $model->signed_pdf_path = $tempSignedPdfPath;
 
-        ApprovalHistory::create([
-            'pdf_purchase_request_id' => $model->id,
-            'user_id' => $user->id,
-            'rank_at_approval' => $rankAtApproval,
-            'action' => 'approved',
-            'signature_image_path' => $user->signature_image_path ?? 'no-signature.png',
-            'comment' => $comment,
-            'signature_position' => $signaturePositionData,
-        ]);
+            $rankAtApproval = 'Unknown';
+            foreach ($user->assignments as $assignment) {
+                if ($assignment->approvalRank->rank_level === $currentRankLevel) {
+                    $rankAtApproval = $assignment->group->name . ' Cấp ' . $assignment->approvalRank->rank_level;
+                    break;
+                }
+            }
 
-        if ($currentRankLevel == 3) {
-            if ($model->requires_director_approval) {
-                $model->current_rank_level = 4;
-            } else {
+            $signaturePositionData = json_encode([
+                'x' => $nextX,
+                'y' => $y,
+                'width' => $width,
+                'height' => $height,
+                'page' => $page,
+            ]);
+
+            ApprovalHistory::create([
+                'pdf_purchase_request_id' => $model->id,
+                'user_id' => $user->id,
+                'rank_at_approval' => $rankAtApproval,
+                'action' => 'approved',
+                'signature_image_path' => $user->signature_image_path ?? 'no-signature.png',
+                'comment' => $comment,
+                'signature_position' => $signaturePositionData,
+            ]);
+
+            if ($currentRankLevel == 3) {
+                if ($model->requires_director_approval) {
+                    $model->current_rank_level = 4;
+                } else {
+                    $model->status = 'purchasing_approval';
+                    $model->current_rank_level = 2;
+                }
+            } elseif ($currentRankLevel == 4) {
                 $model->status = 'purchasing_approval';
                 $model->current_rank_level = 2;
+            } else {
+                $model->current_rank_level++;
             }
-        } elseif ($currentRankLevel == 4) {
-            $model->status = 'purchasing_approval';
-            $model->current_rank_level = 2;
-        } else {
-            $model->current_rank_level++;
-        }
 
-        $model->save();
+            $model->save();
 
-        DB::commit();
+            DB::commit();
 
-        $nextApprovers = $this->findNextApproversForPdfPurchaseRequest($model);
-        if ($nextApprovers->isNotEmpty()) {
-            foreach ($nextApprovers as $approver) {
-                SendPdfApprovalNotification::dispatch($model, $approver);
+            $nextApprovers = $this->findNextApproversForPdfPurchaseRequest($model);
+            if ($nextApprovers->isNotEmpty()) {
+                foreach ($nextApprovers as $approver) {
+                    SendPdfApprovalNotification::dispatch($model, $approver);
+                }
             }
-        }
 
-    } catch (\Exception $e) {
-        DB::rollBack();
-        Log::error("Perform Approval Error for PDF PR {$model->id}: " . $e->getMessage());
-        throw $e;
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error("Perform Approval Error for PDF PR {$model->id}: " . $e->getMessage());
+            throw $e;
+        }
     }
-}
     private function performRejectionLogic(PdfPurchaseRequest $model, $comment)
     {
         $user = Auth::user();
@@ -373,11 +377,10 @@ private function performApprovalLogic(PdfPurchaseRequest $model, $comment = null
 
         $userAssignments = $user->assignments;
         $requiredRankLevel = $pdfPr->current_rank_level;
-        $pdfPrBranchId = $pdfPr->requester->mainBranch->id ?? null;
         $pdfPrSectionId = $pdfPr->requester->sections->first()->id ?? null;
 
         foreach ($userAssignments as $assignment) {
-            if ($assignment->approvalRank->rank_level === $requiredRankLevel && $assignment->branch_id === $pdfPrBranchId) {
+            if ($assignment->approvalRank->rank_level === $requiredRankLevel) {
                 if ($assignment->group->name === 'Phòng Đề Nghị') {
                     if ($requiredRankLevel < 4) {
                         if ($user->sections->contains($pdfPrSectionId)) {
@@ -405,13 +408,13 @@ private function performApprovalLogic(PdfPurchaseRequest $model, $comment = null
         }
 
         $nextRankLevel = $pdfPr->current_rank_level;
-        $branchId = $pdfPr->requester->mainBranch->id ?? null;
         $sectionId = $pdfPr->requester->sections->first()->id ?? null;
         $isRequestingStage = $pdfPr->status === 'pending_approval';
         $groupName = $isRequestingStage ? 'Phòng Đề Nghị' : 'Phòng Mua';
         $targetGroupId = Group::where('name', $groupName)->value('id');
 
-        if (!$targetGroupId || !$branchId) {
+        if (!$targetGroupId) {
+            Log::error("Group '{$groupName}' not found for PDF PR ID {$pdfPr->id}");
             return collect();
         }
 
@@ -420,9 +423,9 @@ private function performApprovalLogic(PdfPurchaseRequest $model, $comment = null
         }
 
         $approverQuery = User::query()
-            ->whereHas('assignments', function ($q) use ($nextRankLevel, $branchId, $targetGroupId) {
+            ->whereHas('assignments', function ($q) use ($nextRankLevel, $targetGroupId) {
                 $q->whereHas('approvalRank', fn($r) => $r->where('rank_level', $nextRankLevel))
-                    ->where('branch_id', $branchId)
+
                     ->where('group_id', $targetGroupId);
             });
 

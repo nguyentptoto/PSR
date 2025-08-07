@@ -156,7 +156,17 @@ class PdfPurchaseRequestController extends Controller
     public function edit(PdfPurchaseRequest $pdfPurchaseRequest)
     {
         abort_if($pdfPurchaseRequest->requester_id !== Auth::id(), 403);
-        abort_if($pdfPurchaseRequest->status !== 'pending_approval' || $pdfPurchaseRequest->current_rank_level > 2, 403, 'Phiếu PDF đã được cấp trên duyệt, không thể cập nhật.');
+
+        // KIỂM TRA MỚI: Chỉ chặn khi phiếu đang được duyệt (chưa bị từ chối)
+        $hasBeenApproved = $pdfPurchaseRequest->approvalHistories()->where('action', 'approved')->exists();
+        if ($pdfPurchaseRequest->status === 'pending_approval' && $hasBeenApproved) {
+            abort(403, 'Phiếu đã có người duyệt, không thể chỉnh sửa.');
+        }
+
+        // Cho phép sửa nếu phiếu ở trạng thái 'rejected'
+        if ($pdfPurchaseRequest->status !== 'pending_approval' && $pdfPurchaseRequest->status !== 'rejected') {
+            abort(403, 'Chỉ có thể sửa phiếu đang chờ duyệt hoặc đã bị từ chối.');
+        }
 
         $user = Auth::user();
         $user->load('sections', 'mainBranch');
@@ -164,11 +174,17 @@ class PdfPurchaseRequestController extends Controller
 
         return view('users.pdf_requests.edit', compact('pdfPurchaseRequest', 'user', 'executingDepartments'));
     }
-
     public function update(Request $request, PdfPurchaseRequest $pdfPurchaseRequest)
     {
+        // Áp dụng logic kiểm tra quyền tương tự hàm edit
         abort_if($pdfPurchaseRequest->requester_id !== Auth::id(), 403);
-    abort_if($pdfPurchaseRequest->status !== 'pending_approval' || $pdfPurchaseRequest->current_rank_level > 2, 403, 'Phiếu PDF đã được cấp trên duyệt, không thể cập nhật.');
+        $hasBeenApproved = $pdfPurchaseRequest->approvalHistories()->where('action', 'approved')->exists();
+        if ($pdfPurchaseRequest->status === 'pending_approval' && $hasBeenApproved) {
+            abort(403, 'Phiếu đã có người duyệt, không thể chỉnh sửa.');
+        }
+        if ($pdfPurchaseRequest->status !== 'pending_approval' && $pdfPurchaseRequest->status !== 'rejected') {
+            abort(403, 'Chỉ có thể sửa phiếu đang chờ duyệt hoặc đã bị từ chối.');
+        }
 
         $validated = $request->validate([
             'pia_code' => ['required', 'string', 'max:255', Rule::unique('pdf_purchase_requests', 'pia_code')->ignore($pdfPurchaseRequest->id)],
@@ -178,67 +194,94 @@ class PdfPurchaseRequestController extends Controller
             'signature_width' => 'nullable|numeric',
             'signature_height' => 'nullable|numeric',
             'signature_page' => 'nullable|integer|min:1',
-            'requires_director_approval' => 'nullable',
+            'requires_director_approval' => 'sometimes|boolean',
+            'attachment' => 'nullable|file|mimes:pdf,xlsx,xls,doc,docx|max:10240',
         ]);
 
         DB::beginTransaction();
         try {
-            $updateData = $request->only([
-                'pia_code',
-                'remarks',
-                'signature_pos_x',
-                'signature_pos_y',
-                'signature_width',
-                'signature_height',
-                'signature_page',
-            ]);
-            $updateData['requires_director_approval'] = (bool) $request->input('requires_director_approval');
-              // Xử lý file đính kèm mới
-        if ($request->hasFile('attachment')) {
-            // Xóa file cũ nếu có
-            if ($pdfPurchaseRequest->attachment_path) {
-                Storage::disk('public')->delete($pdfPurchaseRequest->attachment_path);
+            $isResubmission = $pdfPurchaseRequest->status === 'rejected';
+
+            // Lấy dữ liệu cần cập nhật
+            $updateData = $request->only(['pia_code', 'remarks', 'signature_pos_x', 'signature_pos_y', 'signature_width', 'signature_height', 'signature_page']);
+            $updateData['requires_director_approval'] = $request->boolean('requires_director_approval');
+
+            // Xử lý file đính kèm mới
+            if ($request->hasFile('attachment')) {
+                if ($pdfPurchaseRequest->attachment_path) {
+                    Storage::disk('public')->delete($pdfPurchaseRequest->attachment_path);
+                }
+                $attachmentFile = $request->file('attachment');
+                $attachmentExtension = $attachmentFile->getClientOriginalExtension();
+                $newAttachmentName = 'ATT_' . $validated['pia_code'] . '.' . $attachmentExtension;
+                $updateData['attachment_path'] = $attachmentFile->storeAs('pr_pdfs/attachments', $newAttachmentName, 'public');
+            } elseif ($request->has('remove_attachment')) {
+                if ($pdfPurchaseRequest->attachment_path) {
+                    Storage::disk('public')->delete($pdfPurchaseRequest->attachment_path);
+                    $updateData['attachment_path'] = null;
+                }
             }
-            // Lưu file mới
-            $attachmentFile = $request->file('attachment');
-            $attachmentExtension = $attachmentFile->getClientOriginalExtension();
-            $newAttachmentName = 'ATT_' . $validated['pia_code'] . '.' . $attachmentExtension;
-            $updateData['attachment_path'] = $attachmentFile->storeAs('pr_pdfs/attachments', $newAttachmentName, 'public');
-        }
+
+
+            // Nếu là gửi lại phiếu bị từ chối, RESET quy trình
+            if ($isResubmission) {
+                // Xóa file PDF đã ký cũ (nếu có)
+                if ($pdfPurchaseRequest->signed_pdf_path) {
+                    Storage::disk('public')->delete($pdfPurchaseRequest->signed_pdf_path);
+                    $updateData['signed_pdf_path'] = null;
+                }
+
+                // Reset trạng thái về ban đầu để ký lại
+                $updateData['status'] = 'pending_approval';
+                $updateData['current_rank_level'] = 1; // Quay về cấp của người tạo, chờ ký
+            }
+
             $pdfPurchaseRequest->update($updateData);
 
+            // Ghi lịch sử cho hành động cập nhật hoặc gửi lại
             ApprovalHistory::create([
-                'purchase_request_id' => null,
                 'pdf_purchase_request_id' => $pdfPurchaseRequest->id,
                 'user_id' => Auth::id(),
                 'rank_at_approval' => 'Requester',
-                'action' => 'updated',
-                'signature_image_path' => Auth::user()->signature_image_path ?? 'no-signature.png',
-                'comment' => 'Cập nhật thông tin phiếu PDF.',
+                'action' => $isResubmission ? 'resubmitted_after_rejection' : 'updated',
+                'comment' => $isResubmission ? 'Cập nhật và gửi lại phiếu sau khi bị từ chối.' : 'Cập nhật thông tin phiếu PDF.',
             ]);
 
             DB::commit();
+
+            // Nếu là gửi lại, chuyển đến trang ký. Nếu không, về trang danh sách.
+            if ($isResubmission) {
+                return redirect()->route('users.pdf-requests.preview-sign', $pdfPurchaseRequest->id)
+                    ->with('success', 'Phiếu đã được cập nhật. Vui lòng ký lại để bắt đầu quy trình duyệt mới.');
+            }
+
             return redirect()->route('users.pdf-requests.index')->with('success', 'Phiếu PDF đã được cập nhật thành công!');
+
         } catch (\Exception $e) {
             DB::rollBack();
-            Log::error("Error updating PDF request {$pdfPurchaseRequest->id}: " . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
+            Log::error("Error updating PDF request {$pdfPurchaseRequest->id}: " . $e->getMessage());
             return back()->with('error', 'Đã xảy ra lỗi khi cập nhật phiếu PDF: ' . $e->getMessage())->withInput();
         }
     }
 
     public function destroy(PdfPurchaseRequest $pdfPurchaseRequest)
     {
-        // Chỉ cho phép người tạo phiếu xóa nó
+        // 1. Chỉ cho phép người tạo phiếu được quyền xóa
         abort_if($pdfPurchaseRequest->requester_id !== Auth::id(), 403, 'Bạn không có quyền xóa phiếu PDF này.');
 
-        // Nếu phiếu đã được hoàn thành hoặc đã bị từ chối, không thể xóa
-        // Bạn có thể thêm các trạng thái khác vào đây nếu muốn
-        if ($pdfPurchaseRequest->status === 'completed' || $pdfPurchaseRequest->status === 'rejected') {
-            return back()->with('error', 'Không thể xóa phiếu đã hoàn thành hoặc bị từ chối.');
+        // 2. Kiểm tra xem phiếu đã có người duyệt hay chưa
+        $hasBeenApproved = $pdfPurchaseRequest->approvalHistories()->where('action', 'approved')->exists();
+
+        // 3. Áp dụng quy tắc xóa:
+        // KHÔNG ĐƯỢC XÓA nếu: phiếu đã được duyệt (và không ở trạng thái bị từ chối) HOẶC phiếu đã hoàn thành.
+        // ĐƯỢC XÓA nếu: phiếu chưa có ai duyệt HOẶC phiếu ở trạng thái bị từ chối.
+        if (($hasBeenApproved && $pdfPurchaseRequest->status !== 'rejected') || $pdfPurchaseRequest->status === 'completed') {
+            return back()->with('error', 'Không thể xóa phiếu đã có người duyệt hoặc đã hoàn thành.');
         }
 
         DB::beginTransaction();
         try {
+            // 4. Xóa các file vật lý khỏi storage
             // Xóa file PDF gốc
             if ($pdfPurchaseRequest->original_pdf_path && Storage::disk('public')->exists($pdfPurchaseRequest->original_pdf_path)) {
                 Storage::disk('public')->delete($pdfPurchaseRequest->original_pdf_path);
@@ -249,28 +292,20 @@ class PdfPurchaseRequestController extends Controller
                 Storage::disk('public')->delete($pdfPurchaseRequest->signed_pdf_path);
             }
 
-
-            if ($pdfPurchaseRequest->attachments) {
-                foreach ($pdfPurchaseRequest->attachments as $attachment) {
-                    if (Storage::disk('public')->exists($attachment->file_path)) {
-                        Storage::disk('public')->delete($attachment->file_path);
-                    }
-                }
-                $pdfPurchaseRequest->attachments()->delete();
+            // Xóa file đính kèm (nếu có)
+            if ($pdfPurchaseRequest->attachment_path && Storage::disk('public')->exists($pdfPurchaseRequest->attachment_path)) {
+                Storage::disk('public')->delete($pdfPurchaseRequest->attachment_path);
             }
-
+            $pdfPurchaseRequest->approvalHistories()->delete();
             $pdfPurchaseRequest->delete();
-
             DB::commit();
-
             return redirect()->route('users.pdf-requests.index')->with('success', 'Phiếu PDF và các file liên quan đã được xóa thành công!');
         } catch (\Exception $e) {
             DB::rollBack();
-            Log::error("Error deleting PDF request {$pdfPurchaseRequest->id}: " . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
+            Log::error("Error deleting PDF request {$pdfPurchaseRequest->id}: " . $e->getMessage());
             return back()->with('error', 'Đã xảy ra lỗi khi xóa phiếu PDF: ' . $e->getMessage());
         }
     }
-
     public function previewSign(PdfPurchaseRequest $pdfPurchaseRequest)
     {
         abort_if($pdfPurchaseRequest->requester_id !== Auth::id(), 403);

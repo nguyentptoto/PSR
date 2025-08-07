@@ -154,18 +154,29 @@
                                         </a>
                                     @endif
 
-                                    {{-- Các nút hành động edit và delete cho PDF PR --}}
-                                    @if ($pdfPr->status === 'pending_approval' && $pdfPr->requester_id === Auth::id())
-                                        <a href="{{ route('users.pdf-requests.edit', $pdfPr->id) }}"
-                                            class="btn btn-primary btn-sm" title="Chỉnh sửa">
-                                            Sửa
-                                        </a>
-                                        <button type="button" class="btn btn-danger btn-sm" title="Xóa"
-                                            data-bs-toggle="modal" data-bs-target="#deletePdfConfirmationModal"
-                                            data-delete-url="{{ route('users.pdf-requests.destroy', $pdfPr->id) }}">
-                                            Xóa
-                                        </button>
-                                    @endif
+                                   {{-- Tìm đoạn code hiển thị nút Sửa/Xóa trong file index.blade.php --}}
+
+@php
+    $hasBeenApproved = $pdfPr->approvalHistories()->where('action', 'approved')->exists();
+@endphp
+
+{{-- SỬA LẠI ĐIỀU KIỆN @if --}}
+@if( $pdfPr->requester_id === Auth::id() &&
+    (
+        ($pdfPr->status === 'pending_approval' && !$hasBeenApproved) ||
+        $pdfPr->status === 'rejected'
+    )
+)
+    <a href="{{ route('users.pdf-requests.edit', $pdfPr->id) }}"
+       class="btn btn-primary btn-sm" title="Chỉnh sửa">
+        Sửa
+    </a>
+    <button type="button" class="btn btn-danger btn-sm" title="Xóa"
+            data-bs-toggle="modal" data-bs-target="#deletePdfConfirmationModal"
+            data-delete-url="{{ route('users.pdf-requests.destroy', $pdfPr->id) }}">
+        Xóa
+    </button>
+@endif
                                 </td>
                             </tr>
                         @empty
