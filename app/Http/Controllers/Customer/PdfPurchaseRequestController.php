@@ -102,7 +102,7 @@ class PdfPurchaseRequestController extends Controller
                 $attachmentFile = $request->file('attachment');
                 $attachmentExtension = $attachmentFile->getClientOriginalExtension();
                 // Tạo tên file đính kèm với tiền tố ATT và mã PR
-                $newAttachmentName = 'ATT_' . $piaCode . $attachmentExtension;
+                $newAttachmentName = 'ATT_' . $piaCode . '.' . $attachmentExtension;
                 $attachmentPath = $attachmentFile->storeAs('pr_pdfs/attachments', $newAttachmentName, 'public');
             }
 
@@ -168,7 +168,7 @@ class PdfPurchaseRequestController extends Controller
     public function update(Request $request, PdfPurchaseRequest $pdfPurchaseRequest)
     {
         abort_if($pdfPurchaseRequest->requester_id !== Auth::id(), 403);
-        abort_if($pdfPurchaseRequest->status !== 'pending_approval' || $pdfPurchaseRequest->current_rank_level > 1, 403, 'Phiếu PDF đã được ký hoặc gửi đi duyệt, không thể cập nhật.');
+    abort_if($pdfPurchaseRequest->status !== 'pending_approval' || $pdfPurchaseRequest->current_rank_level > 2, 403, 'Phiếu PDF đã được cấp trên duyệt, không thể cập nhật.');
 
         $validated = $request->validate([
             'pia_code' => ['required', 'string', 'max:255', Rule::unique('pdf_purchase_requests', 'pia_code')->ignore($pdfPurchaseRequest->id)],
@@ -193,7 +193,18 @@ class PdfPurchaseRequestController extends Controller
                 'signature_page',
             ]);
             $updateData['requires_director_approval'] = (bool) $request->input('requires_director_approval');
-
+              // Xử lý file đính kèm mới
+        if ($request->hasFile('attachment')) {
+            // Xóa file cũ nếu có
+            if ($pdfPurchaseRequest->attachment_path) {
+                Storage::disk('public')->delete($pdfPurchaseRequest->attachment_path);
+            }
+            // Lưu file mới
+            $attachmentFile = $request->file('attachment');
+            $attachmentExtension = $attachmentFile->getClientOriginalExtension();
+            $newAttachmentName = 'ATT_' . $validated['pia_code'] . '.' . $attachmentExtension;
+            $updateData['attachment_path'] = $attachmentFile->storeAs('pr_pdfs/attachments', $newAttachmentName, 'public');
+        }
             $pdfPurchaseRequest->update($updateData);
 
             ApprovalHistory::create([

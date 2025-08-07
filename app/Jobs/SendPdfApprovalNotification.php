@@ -10,7 +10,7 @@ use Illuminate\Queue\SerializesModels;
 use App\Models\PdfPurchaseRequest;
 use App\Models\User;
 use Illuminate\Support\Facades\Mail;
-use App\Mail\PurchaseRequestNotification; // SỬA LẠI USE STATEMENT
+use App\Mail\PdfPurchaseRequestNotification; // SỬA LẠI ĐỂ DÙNG MAILABLE MỚI
 
 class SendPdfApprovalNotification implements ShouldQueue
 {
@@ -27,8 +27,7 @@ class SendPdfApprovalNotification implements ShouldQueue
 
     public function handle(): void
     {
-        // SỬA LẠI ĐỂ GỌI ĐÚNG MAILABLE CHUNG
         Mail::to($this->approver->email)
-            ->send(new PurchaseRequestNotification($this->pdfPurchaseRequest));
+            ->send(new PdfPurchaseRequestNotification($this->pdfPurchaseRequest)); // Đã sửa để gọi đúng Mailable
     }
 }

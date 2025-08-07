@@ -32,7 +32,8 @@
                             {{-- src="{{ $pdfUrl }}" này thực chất gọi đến route Laravel (users.pdf-requests.view-file) --}}
                             {{-- Route này sẽ đọc file PDF từ thư mục storage/app/public và stream nội dung ra trình duyệt. --}}
                             {{-- Đây là cách an toàn và đúng đắn để hiển thị file từ storage mà không cần public/storage symbolic link --}}
-                            <iframe class="embed-responsive-item" src="{{ $pdfUrl }}" style="width: 100%; height: 100%;" frameborder="0"></iframe>
+                            <iframe class="embed-responsive-item" src="{{ $pdfUrl }}"
+                                style="width: 100%; height: 100%;" frameborder="0"></iframe>
                         </div>
                     @else
                         <p class="text-danger">Không tìm thấy file PDF gốc.</p>
@@ -43,7 +44,8 @@
                     @if ($userSignaturePath)
                         <div class="mb-3">
                             <label>Ảnh chữ ký của bạn:</label><br>
-                            <img src="{{ asset('storage/' . $userSignaturePath) }}" alt="Chữ ký" style="max-width: 150px; border: 1px solid #ccc;">
+                            <img src="{{ asset('storage/' . $userSignaturePath) }}" alt="Chữ ký"
+                                style="max-width: 150px; border: 1px solid #ccc;">
                             <p class="text-muted small mt-1">Chữ ký này sẽ được dán vào PDF.</p>
                         </div>
                         <p><strong>Vị trí ký đã lưu:</strong></p>
@@ -55,20 +57,24 @@
                             <li>Cao: {{ $pdfPurchaseRequest->signature_height ?? 'Mặc định' }} mm</li>
                         </ul>
 
-                        <form action="{{ route('users.pdf-requests.sign-submit', $pdfPurchaseRequest->id) }}" method="POST">
+                        <form action="{{ route('users.pdf-requests.sign-submit', $pdfPurchaseRequest->id) }}"
+                            method="POST">
                             @csrf
-                            <button type="submit" class="btn btn-success btn-lg"><i class="fas fa-signature"></i> Ký và Hoàn tất Phiếu</button>
+                            <button type="submit" class="btn btn-success btn-lg"><i class="fas fa-signature"></i> Ký và
+                                Hoàn tất Phiếu</button>
                         </form>
                     @else
                         <div class="alert alert-warning">
-                            Không tìm thấy ảnh chữ ký của bạn. Vui lòng <a href="#">cập nhật hồ sơ</a> để thêm ảnh chữ ký trước khi ký.
+                            Không tìm thấy ảnh chữ ký của bạn. Vui lòng <a href="#">cập nhật hồ sơ</a> để thêm ảnh chữ
+                            ký trước khi ký.
                         </div>
                     @endif
                 </div>
             </div>
         </div>
         <div class="card-footer">
-            <a href="{{ route('users.pdf-requests.create') }}" class="btn btn-secondary"><i class="fas fa-arrow-left"></i> Tải lên PDF khác</a>
+            <a href="{{ route('users.pdf-requests.create') }}" class="btn btn-secondary"><i class="fas fa-arrow-left"></i>
+                Tải lên PDF khác</a>
         </div>
     </div>
 @endsection

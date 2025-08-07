@@ -178,53 +178,56 @@ class PdfApprovalController extends Controller
         return back()->with('success', $message);
     }
 
-    private function performApprovalLogic(PdfPurchaseRequest $model, $comment = null)
-    {
-        $user = Auth::user();
-        $user->load('assignments.group', 'assignments.approvalRank');
-        $currentRankLevel = $model->current_rank_level;
+private function performApprovalLogic(PdfPurchaseRequest $model, $comment = null)
+{
+    $user = Auth::user();
+    $user->load('assignments.group', 'assignments.approvalRank');
+    $currentRankLevel = $model->current_rank_level;
 
-        $currentPdfPath = $model->signed_pdf_path
-            ? Storage::disk('public')->path($model->signed_pdf_path)
-            : Storage::disk('public')->path($model->original_pdf_path);
+    $currentPdfPath = $model->signed_pdf_path
+        ? Storage::disk('public')->path($model->signed_pdf_path)
+        : Storage::disk('public')->path($model->original_pdf_path);
 
-        if (!file_exists($currentPdfPath)) {
-            throw new \Exception("Không tìm thấy file PDF hiện tại để thêm chữ ký.");
-        }
+    if (!file_exists($currentPdfPath)) {
+        throw new \Exception("Không tìm thấy file PDF hiện tại để thêm chữ ký.");
+    }
 
-        $userSignaturePath = Storage::disk('public')->path($user->signature_image_path);
-        if (!file_exists($userSignaturePath)) {
-            throw new \Exception("Không tìm thấy ảnh chữ ký của người duyệt.");
-        }
+    $userSignaturePath = Storage::disk('public')->path($user->signature_image_path);
+    if (!file_exists($userSignaturePath)) {
+        throw new \Exception("Không tìm thấy ảnh chữ ký của người duyệt.");
+    }
 
-        // Lấy thông tin vị trí chữ ký mặc định từ model
-        $x = $model->signature_pos_x ?? 85;
-        $y = $model->signature_pos_y ?? 50;
-        $width = $model->signature_width ?? 15;
-        $height = $model->signature_height ?? 12;
-        $page = $model->signature_page ?? 1;
+    $x = $model->signature_pos_x ?? 85;
+    $y = $model->signature_pos_y ?? 50;
+    $width = $model->signature_width ?? 15;
+    $height = $model->signature_height ?? 12;
+    $page = $model->signature_page ?? 1;
 
-        $lastSignedHistory = ApprovalHistory::where('pdf_purchase_request_id', $model->id)
-            ->whereIn('action', ['signed_and_submitted', 'approved'])
-            ->whereNotNull('signature_position')
-            ->latest('created_at')
-            ->first();
+    $lastSignedHistory = ApprovalHistory::where('pdf_purchase_request_id', $model->id)
+        ->whereIn('action', ['signed_and_submitted', 'approved'])
+        ->whereNotNull('signature_position')
+        ->latest('created_at')
+        ->first();
 
-        // Sửa: Giải mã chuỗi JSON một cách an toàn
- // SỬA LỖI NÀY: KIỂM TRA ĐỂ GIẢI MÃ CHUỖI JSON
-        if ($lastSignedHistory && is_string($lastSignedHistory->signature_position)) {
-             $lastPosition = json_decode($lastSignedHistory->signature_position, true);
+    $lastPosition = null;
+    if ($lastSignedHistory) {
+        // Kiểm tra xem dữ liệu có phải là chuỗi không trước khi giải mã
+        if (is_string($lastSignedHistory->signature_position)) {
+            $lastPosition = json_decode($lastSignedHistory->signature_position, true);
         } else {
-             $lastPosition = $lastSignedHistory->signature_position ?? null;
+            // Nếu đã là mảng, gán trực tiếp
+            $lastPosition = $lastSignedHistory->signature_position;
         }
-        // Lấy tọa độ x của chữ ký gần nhất
-        $currentX = $lastPosition ? ($lastPosition['x'] ?? $x) : $x;
+    }
 
-        // Tính toán tọa độ x mới cho chữ ký hiện tại
-        $offsetX = ($lastPosition['width'] ?? $width) + 12;
-        $nextX = $currentX + $offsetX;
+    $currentX = $lastPosition ? ($lastPosition['x'] ?? $x) : $x;
+    $offsetX = ($lastPosition['width'] ?? $width) + 12;
+    $nextX = $currentX + $offsetX;
+    $now = now()->format('H:i:s d/m/Y ');
 
-         $now = now()->format('H:i:s d/m/Y ');
+    $tempSignedPdfFileName = 'PR_Signed_Temp_' . $model->pia_code . '_' . time() . '.pdf';
+    $tempSignedPdfPath = 'pr_pdfs/signed/' . $tempSignedPdfFileName;
+    $tempOutputFilePath = Storage::disk('public')->path($tempSignedPdfPath);
 
     DB::beginTransaction();
     try {
@@ -234,7 +237,6 @@ class PdfApprovalController extends Controller
         $pdf->SetDrawColor(255, 255, 255);
         $pdf->SetLineWidth(0);
         $pdf->SetCellPaddings(0, 0, 0, 0);
-
         $pageCount = $pdf->setSourceFile($currentPdfPath);
 
         if ($page > $pageCount) {
@@ -248,14 +250,12 @@ class PdfApprovalController extends Controller
             $pdf->useTemplate($tplId);
 
             if ($i == $page) {
-                // In ảnh chữ ký của người phê duyệt hiện tại
                 $pdf->Image($userSignaturePath, $nextX, $y, $width, $height, '', '', '', false, 300, '', false, false, false);
                 $pdf->SetFont('helvetica', '', 7);
                 $pdf->SetTextColor(0, 0, 0);
                 $textY_time = $y + $height + 4;
                 $pdf->Text($nextX, $textY_time, $now);
 
-                // Xử lý trường hợp chữ ký duplicate
                 if ($currentRankLevel == 3 && !$model->requires_director_approval) {
                     $nextX_duplicate = $nextX + $offsetX;
                     $pdf->Image($userSignaturePath, $nextX_duplicate, $y, $width, $height, '', '', '', false, 300, '', false, false, false);
@@ -265,15 +265,19 @@ class PdfApprovalController extends Controller
             }
         }
 
-        $signedPdfFileName = 'PR_' . $model->pia_code  . '.pdf';
-        $signedPdfPath = 'pr_pdfs/signed/' . $signedPdfFileName;
-        $outputFilePath = Storage::disk('public')->path($signedPdfPath);
         Storage::disk('public')->makeDirectory('pr_pdfs/signed');
-        $pdf->Output($outputFilePath, 'F');
+        $pdf->Output($tempOutputFilePath, 'F');
 
         if ($model->signed_pdf_path && Storage::disk('public')->exists($model->signed_pdf_path)) {
             Storage::disk('public')->delete($model->signed_pdf_path);
         }
+
+        $model->signature_pos_x = $nextX;
+        $model->signature_pos_y = $y;
+        $model->signature_width = $width;
+        $model->signature_height = $height;
+        $model->signature_page = $page;
+        $model->signed_pdf_path = $tempSignedPdfPath;
 
         $rankAtApproval = 'Unknown';
         foreach ($user->assignments as $assignment) {
@@ -311,13 +315,9 @@ class PdfApprovalController extends Controller
             $model->current_rank_level++;
         }
 
-        $model->signature_pos_x = $nextX;
-        $model->signature_pos_y = $y;
-        $model->signature_width = $width;
-        $model->signature_height = $height;
-        $model->signature_page = $page;
-        $model->signed_pdf_path = $signedPdfPath;
         $model->save();
+
+        DB::commit();
 
         $nextApprovers = $this->findNextApproversForPdfPurchaseRequest($model);
         if ($nextApprovers->isNotEmpty()) {
@@ -326,16 +326,12 @@ class PdfApprovalController extends Controller
             }
         }
 
-        DB::commit(); // Sửa: Commit transaction khi thành công
-
     } catch (\Exception $e) {
         DB::rollBack();
         Log::error("Perform Approval Error for PDF PR {$model->id}: " . $e->getMessage());
         throw $e;
     }
-
-    }
-
+}
     private function performRejectionLogic(PdfPurchaseRequest $model, $comment)
     {
         $user = Auth::user();
